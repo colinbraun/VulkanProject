@@ -10,8 +10,12 @@
 #include <algorithm>
 #include <fstream>
 
+// Width of the viewport
 const uint32_t WIDTH = 800;
+// Height of the viewport
 const uint32_t HEIGHT = 600;
+// The maximum number of frames allowed to be going through the pipeline at once. Do NOT make this more than the number of swap chain images.
+const int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<const char*> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
@@ -27,6 +31,9 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
+/*
+ * Function to initialize the debug messenger. This function is an extension and must be loaded in order to be used.
+*/
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger) {
 	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
 	if (func != nullptr) {
@@ -37,6 +44,9 @@ VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMes
 	}
 }
 
+/*
+ * Function to destroy the debug messenger. This function is an extension and must be loaded in order to be used.
+*/
 void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
 	auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
 	if (func != nullptr) {
@@ -44,21 +54,39 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
 	}
 }
 
+/*
+ * Struct intended to hold the indices of the different queue families.
+ * Note that two families may share the same index, and this is normal
+*/
 struct QueueFamilyIndices {
+	// The graphics queue family index
 	std::optional<uint32_t> graphicsFamily;
+	// The present queue family index
 	std::optional<uint32_t> presentFamily;
 
+	/*
+	 * Determine if the family indices have been assigned
+	 *
+	 * return - true if the indices have been assigned a value, false otherwise.
+	*/
 	bool isComplete() {
 		return graphicsFamily.has_value() && presentFamily.has_value();
 	}
 };
 
+/*
+ * Struct intended to hold information that a swap chain for a given device supports
+*/
 struct SwapChainSupportDetails {
+	// The surface capabilities, including min/max image count, pre-transforms applied to the images, extent, etc.
 	VkSurfaceCapabilitiesKHR capabilities;
+	// The list of available surface formats the swap chain supporrts (I.E. VK_FORMAT_B8G8R8A8_SRGB)
 	std::vector<VkSurfaceFormatKHR> formats;
+	// The list of available present modes the swap chain supports
 	std::vector<VkPresentModeKHR> presentModes;
 };
 
+// Class containing the primary contents of this application
 class HelloTriangleApplication {
 public:
 	void run() {
@@ -69,28 +97,58 @@ public:
 	}
 
 private:
+	// The GLFW window.
 	GLFWwindow* window;
+	// The VkInstance. Connects the vulkan library to this application. Should be created first.
 	VkInstance instance;
+	// The debug messenger used for the validation layers. The callback for the messages is in this class somewhere.
 	VkDebugUtilsMessengerEXT debugMessenger;
+	// The physical device being used
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+	// The logical device being used.
 	VkDevice device;
+	// The chosen device's graphics queue.
 	VkQueue graphicsQueue;
+	// The chosen device's present queue.
 	VkQueue presentQueue;
+	// The surface that rendered images are presented to.
 	VkSurfaceKHR surface;
+	// The swap chain. Holds buffers that are rendered to before being presented.
 	VkSwapchainKHR swapChain;
+	// Handles of the VKImages used in rendering operations.
 	std::vector<VkImage> swapChainImages;
+	// The format of the images in the swap chain. Determined by the chosen format of the VkSurface. Likely VK_FORMAT_B8G8R8A8_SRGB.
 	VkFormat swapChainImageFormat;
+	// The swap chain extent. The width and height of the swap chain images. Likely the dimensions of the viewport.
 	VkExtent2D swapChainExtent;
+	// The swap chain image views.
 	std::vector<VkImageView> swapChainImageViews;
+	// The render pass, which attachments and passes (drawing steps) are defined on.
 	VkRenderPass renderPass;
+	// Used for defining resources and push constants (that is, resources when doing GLSL).
 	VkPipelineLayout pipelineLayout;
+	// The graphics pipeline itself.
 	VkPipeline graphicsPipeline;
+	// The frame buffers of the swap chain. A collection of memory attachments (ImageViews) used by the render pass.
 	std::vector<VkFramebuffer> swapChainFramebuffers;
+	// The command pool for the chosen logical device. The pool of buffers that commandBuffers draws from.
 	VkCommandPool commandPool;
+	// The command buffers that commands (I.E. draw commands) are appended to. One for each frame buffer.
 	std::vector<VkCommandBuffer> commandBuffers;
-	VkSemaphore imageAvailableSemaphore;
-	VkSemaphore renderFinishedSemaphore;
+	// Semaphores to determine if the image to-be-drawn-to is available (one per frame).
+	std::vector<VkSemaphore> imageAvailableSemaphores;
+	// Sempahores to determine if the render pass has been completed (one per frame).
+	std::vector<VkSemaphore> renderFinishedSemaphores;
+	// A flag of sorts to determine if the frame a particular one of these fences is associated with is available. We wait until it is.
+	std::vector<VkFence> inFlightFences;
+	// A flag of sorts to determine if a particular image in the swap chain is in use. Different from the inFlightFences that focuses on limiting number of frames going through at once.
+	std::vector<VkFence> imagesInFlight;
+	// The next frame to be rendered. Only MAX_FRAMES_IN_FLIGHT possible frames (likely 2).
+	size_t currentFrame = 0;
 
+	/*
+	 * Create the Vulkan instance, necessary before doing most anything else.
+	*/
 	void createInstance() {
 		if (enableValidationLayers && !checkValidationLayerSupport()) {
 			throw std::runtime_error("validation layers requested, but not available!");
@@ -421,17 +479,29 @@ private:
 		createFramebuffers();
 		createCommandPool();
 		createCommandBuffers();
-		createSemaphores();
+		createSyncObjects();
 	}
 
-	void createSemaphores() {
+	void createSyncObjects() {
+		imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+		renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+		inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+		imagesInFlight.resize(swapChainImages.size(), VK_NULL_HANDLE);
+
 		VkSemaphoreCreateInfo semaphoreInfo{};
 		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-		if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
-			vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS) {
+		VkFenceCreateInfo fenceInfo{};
+		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-			throw std::runtime_error("failed to create semaphores!");
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+				vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+				vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+
+				throw std::runtime_error("failed to create synchronization objects for a frame!");
+			}
 		}
 	}
 
@@ -712,6 +782,9 @@ private:
 		vkDestroyShaderModule(device, vertShaderModule, nullptr);
 	}
 
+	/*
+	 * Create the swap chain image views from the swap chain's images.
+	*/
 	void createImageViews() {
 		swapChainImageViews.resize(swapChainImages.size());
 
@@ -740,6 +813,12 @@ private:
 		}
 	}
 
+	/*
+	 * Create the swap chain, stored in the swapChain variable.
+	 * Also initializes the swapChainImages, swapChainExtent, and swapChainImageFormat variables.
+	 * Note that a valid physical and logical device should be set up before this,
+	 * since its a swap chain for the particular device.
+	*/
 	void createSwapChain() {
 		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
 
@@ -747,6 +826,7 @@ private:
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
 
+		// The number of images the swap chain will have. We are coming up with a minimum here.
 		uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
 
 		if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -887,13 +967,21 @@ private:
 	}
 
 	void drawFrame() {
+		vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+
 		uint32_t imageIndex;
-		vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+		vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+		if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+			vkWaitForFences(device, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+		}
+
+		imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-		VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+		VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 		submitInfo.waitSemaphoreCount = 1;
 		submitInfo.pWaitSemaphores = waitSemaphores;
@@ -902,11 +990,13 @@ private:
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
 
-		VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
-		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+		vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
 			throw std::runtime_error("failed to submit draw command buffer!");
 		}
 
@@ -923,11 +1013,19 @@ private:
 		presentInfo.pResults = nullptr; // Optional
 
 		vkQueuePresentKHR(presentQueue, &presentInfo);
+
+		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
+	/*
+	 * Perform all the necessary cleanup when terminating the application. Called after main loop ends.
+	*/
 	void cleanup() {
-		vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
-		vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+			vkDestroyFence(device, inFlightFences[i], nullptr);
+		}
 
 		vkDestroyCommandPool(device, commandPool, nullptr);
 
